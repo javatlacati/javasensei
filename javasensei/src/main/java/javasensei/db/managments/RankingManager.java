@@ -5,11 +5,17 @@
  */
 package javasensei.db.managments;
 
+import com.mongodb.BasicDBList;
+import com.mongodb.BasicDBObject;
 import com.mongodb.BasicDBObjectBuilder;
+import com.mongodb.Block;
 import com.mongodb.DBCollection;
 import com.mongodb.DBCursor;
 import com.mongodb.DBObject;
 import com.mongodb.QueryBuilder;
+import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoCursor;
+import com.mongodb.client.MongoIterable;
 import java.io.File;
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -40,6 +46,9 @@ import org.apache.mahout.cf.taste.model.PreferenceArray;
 import org.apache.mahout.cf.taste.neighborhood.UserNeighborhood;
 import org.apache.mahout.cf.taste.recommender.RecommendedItem;
 import org.apache.mahout.cf.taste.similarity.UserSimilarity;
+import static com.mongodb.client.model.Filters.*;
+import org.apache.commons.collections.IteratorUtils;
+import org.apache.commons.math3.optim.nonlinear.scalar.noderiv.CMAESOptimizer;
 
 /**
  *
@@ -47,11 +56,11 @@ import org.apache.mahout.cf.taste.similarity.UserSimilarity;
  */
 public class RankingManager {
 
-    private DBCollection ejercicios = Connection.getCollection().get(CollectionsDB.EJERCICIOS);
-    private DBCollection rankingEjercicios = Connection.getCollection().get(CollectionsDB.RANKING_EJERCICIOS);
+    private MongoCollection<BasicDBObject> ejercicios = Connection.getCollection().get(CollectionsDB.EJERCICIOS);
+    private MongoCollection<BasicDBObject> rankingEjercicios = Connection.getCollection().get(CollectionsDB.RANKING_EJERCICIOS);
 
-    private DBCollection recursos = Connection.getCollection().get(CollectionsDB.RECURSOS);
-    private DBCollection rankingRecursos = Connection.getCollection().get(CollectionsDB.RANKING_RECURSOS);
+    private MongoCollection<BasicDBObject> recursos = Connection.getCollection().get(CollectionsDB.RECURSOS);
+    private MongoCollection<BasicDBObject> rankingRecursos = Connection.getCollection().get(CollectionsDB.RANKING_RECURSOS);
     ;
 
     private ModeloEstudiante estudiante;
@@ -95,12 +104,12 @@ public class RankingManager {
     }
 
     private int getIdLeccion(int idEjercicio) {
-        return new Double(ejercicios.findOne(
-                QueryBuilder.start("id").is(idEjercicio).get(),
-                QueryBuilder.start("_id").is(0)
-                .put("idLeccion").is(1)
-                .get()
-        ).get("idLeccion").toString()).intValue();
+        return new Double(ejercicios.find(
+                eq("id",idEjercicio)
+        ).projection(
+                new BasicDBObject("id",0)
+                .append("idLeccion", 1)
+        ).first().get("idLeccion").toString()).intValue();
     }
 
     public String getRecommenderResources(int cantidad, int idEjercicio) {
@@ -108,25 +117,33 @@ public class RankingManager {
 
         try {
             int idLeccionPrincipal = getIdLeccion(idEjercicio);
+            
+            List<BasicDBObject> listaRecursos = new ArrayList<>();
+            
+            recursos.find(
+                    and(
+                        in("id",getRecommendersItemsIDAsArray(recommenderRecursos, cantidad)),
+                        eq("idLeccion",idLeccionPrincipal)
+                    )
+            ).forEach(new Block<BasicDBObject>(){
 
-            List<DBObject> listaRecursos = recursos.find(
-                    QueryBuilder.start("id").in(
-                            getRecommendersItemsIDAsArray(recommenderRecursos, cantidad))
-                    .put("idLeccion").is(idLeccionPrincipal)
-                    .get()
-            ).toArray();
+                @Override
+                public void apply(BasicDBObject t) {
+                    listaRecursos.add(t);
+                }
+                
+            });
 
-            listaRecursos.replaceAll((DBObject object) -> {
-                object.put("ranking", rankingRecursos.findOne(
-                        QueryBuilder.start("idRecurso")
-                        .is(object.get("id"))
-                        .put("idAlumno")
-                        .is(estudiante.getId())
-                        .get(),
-                        QueryBuilder.start("_id").is(0)
-                        .put("ranking").is(1)
-                        .get()
-                ).get("ranking"));
+            listaRecursos.replaceAll((BasicDBObject object) -> {
+                object.put("ranking", rankingRecursos.find(
+                        and(
+                                eq("idRecurso",object.get("id"))
+                                ,eq("idAlumno", estudiante.getId())
+                        )
+                ).projection(
+                        new BasicDBObject("_id",0)
+                        .append("ranking", 1)
+                ).first().get("ranking"));
 
                 return object;
             });
@@ -166,7 +183,7 @@ public class RankingManager {
         return recommender.recommend(estudiante.getId(), cantidad);
     }
 
-    protected String getRecommenders(DBCollection collection, AbstractRecommender recommender, int cantidad, boolean random) {
+    protected String getRecommenders(MongoCollection<BasicDBObject> collection, AbstractRecommender recommender, int cantidad, boolean random) {
         String result = "{}";
 
         List<RecommendedItem> recommenders = new ArrayList<>();
@@ -183,7 +200,7 @@ public class RankingManager {
 
                 double number = collection.count();
 
-                DBObject object = collection.find().limit(1).skip((int) Math.floor(Math.random() * number)).next();
+                DBObject object = collection.find().limit(1).skip((int) Math.floor(Math.random() * number)).first();
 
                 array.add(
                         Math.round(Double.parseDouble(object.get("idEjercicio").toString()))
@@ -195,10 +212,19 @@ public class RankingManager {
                 array.add(item.getItemID());
             }
 
+            BasicDBList list = new BasicDBList();
+            
             //Se crea un json array con los id obtenidos de los ejercicios
-            result = ejercicios.find(
-                    QueryBuilder.start("id").in(array).get()
-            ).toArray().toString();
+            ejercicios.find(
+                    in("id", array)
+            ).forEach(new Block<BasicDBObject>(){
+                @Override
+                public void apply(BasicDBObject t) {
+                    list.add(t);
+                }
+            });
+            
+            result = list.toString();
         } catch (Exception ex) {
             JavaException.printMessage(ex, System.out);
         }
@@ -206,12 +232,12 @@ public class RankingManager {
         return result;
     }
 
-    public FastByIDMap buildDataModel(DBCollection rankings, String fieldNameUserId, String fieldNameItemId, String fieldNameValue) {
+    public FastByIDMap buildDataModel(MongoCollection<BasicDBObject> rankings, String fieldNameUserId, String fieldNameItemId, String fieldNameValue) {
         //Obtenemos todos los ranking actuales y los almacenamos en el archivo csv
-        DBCursor cursor = rankings.find();
         FastByIDMap<PreferenceArray> userData = new FastByIDMap<>();
-
-        if (cursor.count() > 0) {
+        
+        if (rankings.count() > 0) {
+            MongoCursor<BasicDBObject> cursor = rankings.find().iterator();
 
             List<Preference> preferences = new ArrayList<>();
             Long idLastUser = null;
@@ -292,7 +318,15 @@ public class RankingManager {
 
             //Obtenemos los id de ejercicios que no estan rankeados por el alumno
             //Se colocara un valor 2 de default para dicho ranking, de acuerdo a la escala de LIKERT
-            List<DBObject> objects = ejercicios.find(query.get()).toArray();
+            List<DBObject> objects = new ArrayList<>();
+                    
+            ejercicios.find(
+                    nin("id", 
+                            rankingEjercicios.distinct("idEjercicio", eq("idAlumno",estudiante.getId())
+                                    ,
+                            )
+                    )
+            )
 
             if (!objects.isEmpty()) {
                 List<DBObject> listObjects = new ArrayList<>();
