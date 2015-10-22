@@ -87,12 +87,18 @@ public class ModeloEstudiante implements java.io.Serializable, DBInterface {
     }
 
     @Override
-    public DBObject convertToDBObject() {
+    public BasicDBObject convertToDBObject() {
         return convertToDBObject(false);
     }
     
-    public DBObject convertToDBObject(boolean save) {
-        DBObject dbObject = new BasicDBObject();
+    /**
+     *
+     * @param save
+     * @return
+     */
+    @Override
+    public BasicDBObject convertToDBObject(boolean save) {
+        BasicDBObject dbObject = new BasicDBObject();
 
         dbObject.put("idFacebook", getIdFacebook());
         if (save) {

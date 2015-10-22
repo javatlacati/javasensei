@@ -1,8 +1,7 @@
 package javasensei.db.managments;
 
-import com.mongodb.DBCollection;
-import com.mongodb.DBObject;
-import com.mongodb.QueryBuilder;
+import com.mongodb.BasicDBObject;
+import com.mongodb.client.MongoCollection;
 import javasensei.db.Connection;
 
 /**
@@ -11,16 +10,16 @@ import javasensei.db.Connection;
  */
 public class EjerciciosManager {
 
-    private final DBCollection rankingEjerciciosCollection = Connection.getCollection().get(CollectionsDB.RANKING_EJERCICIOS);
+    private final MongoCollection<BasicDBObject> rankingEjerciciosCollection = Connection.getCollection().get(CollectionsDB.RANKING_EJERCICIOS);
 
     public Integer getRankingEjercicio(Integer idEjercicio, Long idAlumno) {
         Integer ranking = 2; //Default
 
-        DBObject object = rankingEjerciciosCollection.findOne(
-                QueryBuilder.start("idEjercicio").is(idEjercicio)
-                .put("idAlumno").is(idAlumno)
-                .get()
-        );
+        BasicDBObject object = rankingEjerciciosCollection.find(
+                new BasicDBObject()
+                .append("idEjercicio", idEjercicio)
+                .append("idAlumno",idAlumno)
+        ).first();
 
         if (object != null) {
             ranking = new Double(object.get("ranking").toString()).intValue();
@@ -33,12 +32,13 @@ public class EjerciciosManager {
         boolean result = false;
 
         try {
-            rankingEjerciciosCollection.update(
-                    QueryBuilder.start("idEjercicio").is(idEjercicio)
-                    .put("idAlumno").is(idAlumno)
-                    .get(), QueryBuilder.start("$set").is(
-                            QueryBuilder.start("ranking").is(ranking).get()
-                    ).get()
+            rankingEjerciciosCollection.updateOne(
+                    new BasicDBObject()
+                    .append("idEjercicio", idEjercicio)
+                    .append("idAlumno", idAlumno)
+                    , new BasicDBObject()
+                    .append("$set",new BasicDBObject("ranking",ranking)
+                )
             );
 
             result = true;
